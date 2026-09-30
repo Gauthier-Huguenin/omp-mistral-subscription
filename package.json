@@ -1,0 +1,27 @@
+{
+	"name": "omp-mistral-subscription",
+	"version": "0.1.0",
+	"description": "Mistral Vibe subscription provider for OMP: browser sign-in on console.mistral.ai, models billed on the Mistral plan quota, including Z.ai GLM 5.3.",
+	"license": "MIT",
+	"type": "module",
+	"keywords": [
+		"omp-extension",
+		"omp",
+		"mistral",
+		"vibe",
+		"subscription"
+	],
+	"files": [
+		"extensions/",
+		"README.md",
+		"LICENSE"
+	],
+	"engines": {
+		"omp": ">=18"
+	},
+	"omp": {
+		"extensions": [
+			"./extensions/mistral-subscription"
+		]
+	}
+}
