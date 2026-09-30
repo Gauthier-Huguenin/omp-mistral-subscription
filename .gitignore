@@ -1,0 +1,17 @@
+# Build artifacts
+node_modules/
+dist/
+build/
+*.log
+
+# Local testing
+.env
+.env.*
+*.local
+
+# Editor and OS noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp

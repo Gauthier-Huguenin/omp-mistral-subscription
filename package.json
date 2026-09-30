@@ -1,16 +1,33 @@
 {
 	"name": "omp-mistral-subscription",
-	"version": "0.1.0",
-	"description": "Mistral Vibe subscription provider for OMP: browser sign-in on console.mistral.ai, models billed on the Mistral plan quota, including Z.ai GLM 5.3.",
+	"version": "0.2.0",
+	"description": "Mistral Vibe subscription provider for OMP: browser sign-in on console.mistral.ai, plan-quota billing, Mistral and Z.ai GLM models.",
 	"license": "MIT",
 	"type": "module",
 	"keywords": [
 		"omp-extension",
 		"omp",
+		"oh-my-pi",
 		"mistral",
 		"vibe",
-		"subscription"
+		"mistral-vibe",
+		"glm",
+		"subscription",
+		"coding-agent",
+		"provider"
 	],
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/Gauthier-Huguenin/omp-mistral-subscription"
+	},
+	"homepage": "https://github.com/Gauthier-Huguenin/omp-mistral-subscription#readme",
+	"bugs": {
+		"url": "https://github.com/Gauthier-Huguenin/omp-mistral-subscription/issues"
+	},
+	"author": {
+		"name": "Gauthier Huguenin",
+		"url": "https://github.com/Gauthier-Huguenin"
+	},
 	"files": [
 		"extensions/",
 		"README.md",
