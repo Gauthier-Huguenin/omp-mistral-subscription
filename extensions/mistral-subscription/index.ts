@@ -7,15 +7,24 @@
  * that flow returns. Usage is billed against the Mistral plan attached to the
  * signed-in account (Pro or higher) rather than a separate pay-as-you-go key.
  *
- * Port of https://github.com/5omeOtherGuy/pi-mistral-subscription to OMP's
- * extension API. Two differences: `api: "openai-completions"`, because OMP has
- * no `mistral-conversations` transport and its built-in `mistral` provider uses
- * the same wire contract, and a baseUrl carrying the `/v1` suffix that contract
- * needs.
+ * The model list is discovered at runtime from the account's own
+ * `GET /v1/models` response, so every chat model the plan serves is usable,
+ * including models Mistral hosts for Z.ai and DeepSeek. Mistral lists each
+ * underlying model under several alias ids that share one
+ * `billing_model_name` (e.g. `mistral-medium-latest`, `mistral-medium-3.5`,
+ * `mistral-vibe-cli-latest`); those rows are collapsed to one canonical
+ * entry so the model picker is not flooded with duplicates.
  *
- * Model costs are Mistral's public list prices (USD per million tokens) for the
- * same models, so OMP reports a notional spend. The subscription plan covers
- * these calls, so no invoice matches the figure.
+ * Port of https://github.com/5omeOtherGuy/pi-mistral-subscription to OMP's
+ * extension API. `api: "openai-completions"`, because OMP has no
+ * `mistral-conversations` transport and its built-in `mistral` provider uses
+ * the same wire contract, with a baseUrl carrying the `/v1` suffix that
+ * contract needs.
+ *
+ * Costs are not declared per model: OMP fills them from its bundled catalog
+ * by model id, so the reported spend is the public list price where the id is
+ * known and zero otherwise. The subscription plan covers these calls, so no
+ * invoice matches the figure.
  */
 
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
@@ -56,6 +65,12 @@ function asRecord(value: unknown, message: string): Record<string, unknown> {
 		throw new Error(`${message}: malformed JSON response`);
 	}
 	return value as Record<string, unknown>;
+}
+
+function asObject(value: unknown): Record<string, unknown> | undefined {
+	return typeof value === "object" && value !== null && !Array.isArray(value)
+		? (value as Record<string, unknown>)
+		: undefined;
 }
 
 function requiredString(record: Record<string, unknown>, field: string, message: string): string {
@@ -184,12 +199,109 @@ const mistralOAuth = {
 
 const TEXT_AND_IMAGE_INPUT = ["text", "image"];
 const TEXT_INPUT = ["text"];
-// Mistral accepts reasoning_effort values "none" and "high" only.
-const MISTRAL_THINKING = {
+
+type ThinkingSpec = {
+	mode: "effort";
+	efforts: string[];
+	effortMap?: Record<string, string>;
+};
+
+// Mistral's own models accept reasoning_effort "none" and "high" only
+// (verified against api.mistral.ai on 2026-11-04); map OMP's four levels onto
+// that pair.
+const MISTRAL_EFFORT: ThinkingSpec = {
 	mode: "effort",
 	efforts: ["low", "medium", "high", "xhigh"],
 	effortMap: { low: "none", medium: "high", high: "high", xhigh: "high" },
 };
+
+// Accepted reasoning_effort values per model, verified against api.mistral.ai
+// on 2026-11-04. Reasoning models absent from the table fall back to
+// MISTRAL_EFFORT; shortcut: hosted third-party models may reject that
+// none/high pair until the table is updated.
+const THINKING_BY_MODEL: Record<string, ThinkingSpec> = {
+	"mistral-large-4": { mode: "effort", efforts: ["low", "medium", "high"] },
+	"zai-glm-5-3": { mode: "effort", efforts: ["low", "high", "max"] },
+	"zai-glm-5-3-flash": { mode: "effort", efforts: ["low", "high", "max"] },
+	"zai-glm-5-2": { mode: "effort", efforts: ["low", "medium", "high", "xhigh", "max"] },
+	"deepseek-v4-1-flash-1017": { mode: "effort", efforts: ["low", "high", "xhigh", "max"] },
+};
+
+type DiscoveredModel = {
+	id: string;
+	name: string;
+	reasoning: boolean;
+	thinking?: ThinkingSpec;
+	input: string[];
+	contextWindow: number;
+	supportsTools: boolean;
+};
+
+function prettify(id: string): string {
+	return id
+		.replaceAll("-", " ")
+		.replace(/\b\w/g, (c) => c.toUpperCase())
+		.replace(/\bDeepseek\b/, "DeepSeek")
+		.replace(/\bGlm\b/g, "GLM")
+		.replace(/\bZai\b/g, "Z.ai");
+}
+
+/** Prefer dated ids (mistral-medium-2604) over aliases (mistral-medium-latest). */
+function canonicalRank(id: string, billing: string): number {
+	if (/\d{4}$/.test(id)) return 0;
+	return id === billing ? 1 : 2;
+}
+
+function toModelRow(raw: Record<string, unknown>): DiscoveredModel {
+	const id = raw.id as string;
+	const capabilities = asObject(raw.capabilities) ?? {};
+	const contextWindow =
+		typeof raw.max_context_length === "number" && raw.max_context_length > 0 ? raw.max_context_length : 131072;
+	const reasoning = capabilities.reasoning === true;
+	// maxTokens is left unset on purpose: OMP fills it from its bundled catalog
+	// by model id, and falls back to a conservative 16384 for unknown ids.
+	return {
+		id,
+		name: prettify(id),
+		reasoning,
+		...reasoning ? { thinking: THINKING_BY_MODEL[id] ?? MISTRAL_EFFORT } : {},
+		input: capabilities.vision === true ? TEXT_AND_IMAGE_INPUT : TEXT_INPUT,
+		contextWindow,
+		supportsTools: capabilities.function_calling !== false,
+	};
+}
+
+/**
+ * List every chat model the signed-in account can use. Called by OMP with the
+ * OAuth credential's access token; the result is cached for 24 h.
+ */
+async function fetchMistralModels(apiKey?: string): Promise<DiscoveredModel[]> {
+	if (!apiKey) return [];
+	const message = "Mistral model list unavailable";
+	const response = await fetch(`${BASE_URL}/models`, {
+		headers: { Authorization: `Bearer ${apiKey}`, Accept: "application/json" },
+	});
+	const payload = asRecord(await readJson(response, message), message);
+	if (!Array.isArray(payload.data)) throw new Error(`${message}: malformed JSON response`);
+
+	// Collapse alias rows (one billing_model_name, many ids) to one entry, and
+	// skip rows that cannot serve chat completions (embeddings, OCR, TTS...).
+	const canonical = new Map<string, Record<string, unknown>>();
+	for (const entry of payload.data) {
+		const raw = asObject(entry);
+		if (!raw || typeof raw.id !== "string" || raw.id.length === 0) continue;
+		if ((asObject(raw.capabilities)?.completion_chat ?? false) !== true) continue;
+		const billing =
+			typeof raw.billing_model_name === "string" && raw.billing_model_name.length > 0
+				? raw.billing_model_name
+				: raw.id;
+		const winner = canonical.get(billing);
+		if (!winner || canonicalRank(raw.id, billing) < canonicalRank(winner.id as string, billing)) {
+			canonical.set(billing, raw);
+		}
+	}
+	return [...canonical.values()].map(toModelRow);
+}
 
 export default function mistralSubscription(pi: ExtensionAPI) {
 	pi.registerProvider(PROVIDER_ID, {
@@ -197,94 +309,14 @@ export default function mistralSubscription(pi: ExtensionAPI) {
 		api: "openai-completions",
 		authHeader: true,
 		oauth: mistralOAuth,
-		models: [
-			{
-				id: "mistral-medium-2604",
-				name: "Mistral Medium 3.5 (subscription)",
-				reasoning: true,
-				thinking: MISTRAL_THINKING,
-				input: TEXT_AND_IMAGE_INPUT,
-				cost: { input: 1.5, output: 7.5, cacheRead: 0.15, cacheWrite: 0 },
-				contextWindow: 262144,
-				maxTokens: 32768,
-			},
-			{
-				id: "mistral-small-latest",
-				name: "Mistral Small 4 (subscription)",
-				reasoning: true,
-				thinking: MISTRAL_THINKING,
-				input: TEXT_AND_IMAGE_INPUT,
-				cost: { input: 0.15, output: 0.6, cacheRead: 0.015, cacheWrite: 0 },
-				contextWindow: 256000,
-				maxTokens: 32768,
-			},
-			{
-				id: "mistral-large-latest",
-				name: "Mistral Large 3 (subscription)",
-				reasoning: false,
-				input: TEXT_AND_IMAGE_INPUT,
-				cost: { input: 0.5, output: 1.5, cacheRead: 0.05, cacheWrite: 0 },
-				contextWindow: 262144,
-				maxTokens: 32768,
-			},
-			{
-				id: "devstral-medium-latest",
-				name: "Devstral 2 (subscription)",
-				reasoning: false,
-				input: TEXT_INPUT,
-				cost: { input: 0.4, output: 2, cacheRead: 0, cacheWrite: 0 },
-				contextWindow: 262144,
-				maxTokens: 32768,
-			},
-			{
-				id: "ministral-14b-2512",
-				name: "Ministral 3 14B (subscription)",
-				reasoning: false,
-				input: TEXT_AND_IMAGE_INPUT,
-				cost: { input: 0.2, output: 0.2, cacheRead: 0.02, cacheWrite: 0 },
-				contextWindow: 262144,
-				maxTokens: 32768,
-			},
-			{
-				id: "ministral-8b-2512",
-				name: "Ministral 3 8B (subscription)",
-				reasoning: false,
-				input: TEXT_AND_IMAGE_INPUT,
-				cost: { input: 0.15, output: 0.15, cacheRead: 0.015, cacheWrite: 0 },
-				contextWindow: 131072,
-				maxTokens: 32768,
-			},
-			{
-				id: "ministral-3b-2512",
-				name: "Ministral 3 3B (subscription)",
-				reasoning: false,
-				input: TEXT_AND_IMAGE_INPUT,
-				cost: { input: 0.1, output: 0.1, cacheRead: 0.01, cacheWrite: 0 },
-				contextWindow: 131072,
-				maxTokens: 32768,
-			},
-			// Z.ai models hosted by Mistral (owned_by mistralai, billing_model_name
-			// zai-glm-*). No thinking surface is declared: Mistral exposes no
-			// documented reasoning_effort control for them. zai-glm-5-2 is not
-			// listed: deprecated since 2026-09-29, removed 2026-10-31, superseded
-			// by GLM 5.3.
-			{
-				id: "zai-glm-5-3",
-				name: "Z.ai GLM 5.3 via Mistral (subscription)",
-				reasoning: true,
-				input: TEXT_INPUT,
-				cost: { input: 1.4, output: 4.4, cacheRead: 0.14, cacheWrite: 0 },
-				contextWindow: 1048576,
-				maxTokens: 32768,
-			},
-		],
+		fetchDynamicModels: fetchMistralModels,
 	});
 
 	pi.registerCommand("mistral-subscription-status", {
 		description: "Show how the Mistral subscription provider is configured",
 		handler: async (_args, ctx) => {
 			ctx.ui.notify(
-				`${PROVIDER_ID}: browser sign-in on console.mistral.ai, models served from ${BASE_URL} over openai-completions.`,
+				`${PROVIDER_ID}: browser sign-in on console.mistral.ai, models discovered live from ${BASE_URL}/models over openai-completions.`,
 				"info",
 			);
 		},
