@@ -4,13 +4,15 @@
 
 **Use your Mistral Vibe subscription in [OMP](https://github.com/can1357/oh-my-pi).**
 
-Browser sign-in on `console.mistral.ai`, then code with Mistral Medium 3.5,
-Devstral 2, or Z.ai GLM 5.3, billed on your plan's monthly quota, not on
-pay-as-you-go API credits.
+Browser sign-in on `console.mistral.ai`, then code with every chat model your
+plan serves — Mistral Medium, Large 4, Codestral, Devstral, plus Z.ai GLM and
+DeepSeek models hosted by Mistral — billed on your plan's monthly quota, not
+on pay-as-you-go API credits. The model list is discovered live from your
+own account, so new models appear without an extension update.
 
 [![OMP extension](https://img.shields.io/badge/OMP-extension-8A2BE2)](https://github.com/can1357/oh-my-pi)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Models: 8](https://img.shields.io/badge/models-8-blue)](#models)
+[![Models: dynamic](https://img.shields.io/badge/models-dynamic-blue)](#models)
 
 </div>
 
@@ -77,30 +79,53 @@ session plus a key revocation on the Mistral console.
 
 ## Models
 
-| Model id | Name | Context | Reasoning | Images | $/M in, out |
-| --- | --- | --- | --- | --- | --- |
-| `mistral-medium-2604` | Mistral Medium 3.5 | 262k | yes | yes | 1.50, 7.50 |
-| `mistral-small-latest` | Mistral Small 4 | 256k | yes | yes | 0.15, 0.60 |
-| `mistral-large-latest` | Mistral Large 3 | 262k | no | yes | 0.50, 1.50 |
-| `devstral-medium-latest` | Devstral 2 | 262k | no | no | 0.40, 2.00 |
-| `ministral-14b-2512` | Ministral 3 14B | 262k | no | yes | 0.20, 0.20 |
-| `ministral-8b-2512` | Ministral 3 8B | 131k | no | yes | 0.15, 0.15 |
-| `ministral-3b-2512` | Ministral 3 3B | 131k | no | yes | 0.10, 0.10 |
-| `zai-glm-5-3` | Z.ai GLM 5.3 (hosted by Mistral) | 1M | yes | no | 1.40, 4.40 |
+The model list is **discovered at runtime** from your account's own
+`GET https://api.mistral.ai/v1/models` response, so it always matches what
+your plan serves. Mistral lists each underlying model under several alias ids
+sharing one `billing_model_name` (e.g. `mistral-medium-latest`,
+`mistral-medium-3.5`, `mistral-vibe-cli-latest`); those rows are collapsed
+to one canonical entry so the model picker stays clean.
 
-Model ids and limits were read from the account's own
-`GET https://api.mistral.ai/v1/models` response and cross-checked against
-Mistral's models overview and pricing pages.
+As of 2026-11-04 a Pro account discovers 14 chat models:
+
+| Model id | Context | Reasoning | Efforts | Images |
+| --- | --- | --- | --- | --- |
+| `codestral-2508` | 256k | no | - | no |
+| `deepseek-v4-1-flash-1017` | 1M | yes | low, high, xhigh, max | no |
+| `labs-leanstral-1-5` | 262k | yes | low, medium, high, xhigh | yes |
+| `mistral-large-4` | 1M | yes | low, medium, high | yes |
+| `mistral-large-2512` | 262k | no | - | yes |
+| `mistral-medium-2604` | 262k | yes | low, medium, high, xhigh | yes |
+| `mistral-small-2603` | 262k | yes | low, medium, high, xhigh | yes |
+| `ministral-14b-2512` | 262k | no | - | yes |
+| `ministral-8b-2512` | 262k | no | - | yes |
+| `ministral-3b-2512` | 131k | no | - | yes |
+| `voxtral-small-2507` | 33k | no | - | no |
+| `zai-glm-5-3` | 1M | yes | low, high, max | no |
+| `zai-glm-5-3-flash` | 1M | yes | low, high, max | yes |
+| `zai-glm-5-2` | 1M | yes | low, medium, high, xhigh, max | no |
 
 Notes:
 
-- Costs are Mistral's public list prices, reported as a **notional** spend.
-  The subscription plan covers these calls, so no invoice matches the figure.
-- `zai-glm-5-2` is intentionally absent: Mistral deprecated it on 2026-09-29
-  and removes it on 2026-10-31, replaced by GLM 5.3.
-- No thinking surface is declared for `zai-glm-5-3`: Mistral documents no
-  `reasoning_effort` control for it. The parameter is accepted by the API
-  but its effect is unverified.
+- Context windows, vision, and reasoning flags come from the models response;
+  OMP fills costs and max output tokens from its bundled catalog by model id
+  (unknown ids get a notional zero cost). The subscription plan covers these
+  calls, so no invoice matches the reported spend.
+- Reasoning effort ranges are verified against the live API: Mistral's own
+  models accept `reasoning_effort` values `none` and `high` only, so OMP's
+  four levels are mapped onto that pair; hosted GLM, DeepSeek, and Large 4
+  models expose their own ladders (`max` included) and pass through as-is.
+- Mistral's chat API never accepts `reasoning_content` in assistant message
+  history (HTTP 422 `extra_forbidden`) and emits thinking as content parts;
+  the extension declares this wire compat on every discovered model, since
+  OMP's bundled catalog pins the same behavior to the provider id `mistral`
+  and does not match a custom provider id.
+- Models your plan gates (e.g. Labs models disabled for your org) stay
+  listed but return an error on use; Mistral's models endpoint does not
+  surface entitlements.
+- Labs models (`labs-*`) also require admin enablement in your organization
+  settings.
+- Refresh the list any time with `omp models refresh`.
 
 ## Billing
 
@@ -135,6 +160,9 @@ workloads.
 4. The key is stored in OMP's auth store and sent as
    `Authorization: Bearer` on requests to
    `https://api.mistral.ai/v1/chat/completions`.
+5. OMP calls the extension's model discovery with the stored key, which lists
+   `GET https://api.mistral.ai/v1/models` and caches the result for 24 h.
+   `/login` and `omp models refresh` both force a fresh fetch.
 
 This flow mirrors the Mistral Vibe Code CLI's own browser sign-in, ported
 from [5omeOtherGuy/pi-mistral-subscription](https://github.com/5omeOtherGuy/pi-mistral-subscription)
@@ -145,11 +173,10 @@ API keys, and never sees your Mistral password.
 
 | Symptom | Likely cause and fix |
 | --- | --- |
-| `Unknown OAuth provider 'mistral-subscription'` | Extension not loaded. Reinstall, or check `omp models` lists `mistral-subscription/*` models. |
+| `model not found` for a model id | The plan gates model access. Pick another discovered model with `omp models mistral-subscription`. |
 | Sign-in page opens but nothing happens | The sign-in process expired (10 min). Run `/login` again. |
 | `HTTP 401` on requests | Key revoked or plan lapsed. `/logout`, then `/login` again. |
 | `HTTP 429` | Rate limit. OMP retries automatically; for sustained heavy use, check your plan's limits. |
-| `model not found` for a model id | The plan gates model access. Fall back to `mistral-medium-2604`. |
 
 ## Contributing
 
