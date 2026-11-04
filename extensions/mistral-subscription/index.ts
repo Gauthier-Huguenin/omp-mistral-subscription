@@ -227,6 +227,18 @@ const THINKING_BY_MODEL: Record<string, ThinkingSpec> = {
 	"deepseek-v4-1-flash-1017": { mode: "effort", efforts: ["low", "high", "xhigh", "max"] },
 };
 
+// Mistral's chat API never accepts reasoning_content in message history
+// (extra_forbidden 422), and emits assistant thinking as content parts.
+// OMP's bundled catalog pins this behavior to the provider id "mistral"
+// (providers/mistral.kdl:3); it does not match a custom provider id, so the
+// same wire compat is declared here for every discovered row.
+const MISTRAL_WIRE = {
+	supportsPromptCacheKey: true,
+	requiresReasoningContentForToolCalls: false,
+	requiresReasoningContentForAllAssistantTurns: false,
+	mistralReasoningContentParts: true,
+};
+
 type DiscoveredModel = {
 	id: string;
 	name: string;
@@ -235,6 +247,12 @@ type DiscoveredModel = {
 	input: string[];
 	contextWindow: number;
 	supportsTools: boolean;
+	compat: {
+		supportsPromptCacheKey: boolean;
+		requiresReasoningContentForToolCalls: boolean;
+		requiresReasoningContentForAllAssistantTurns: boolean;
+		mistralReasoningContentParts: boolean;
+	};
 };
 
 function prettify(id: string): string {
@@ -268,6 +286,7 @@ function toModelRow(raw: Record<string, unknown>): DiscoveredModel {
 		input: capabilities.vision === true ? TEXT_AND_IMAGE_INPUT : TEXT_INPUT,
 		contextWindow,
 		supportsTools: capabilities.function_calling !== false,
+		compat: MISTRAL_WIRE,
 	};
 }
 
