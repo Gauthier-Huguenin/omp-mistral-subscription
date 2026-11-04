@@ -115,6 +115,11 @@ Notes:
   models accept `reasoning_effort` values `none` and `high` only, so OMP's
   four levels are mapped onto that pair; hosted GLM, DeepSeek, and Large 4
   models expose their own ladders (`max` included) and pass through as-is.
+- Mistral's chat API never accepts `reasoning_content` in assistant message
+  history (HTTP 422 `extra_forbidden`) and emits thinking as content parts;
+  the extension declares this wire compat on every discovered model, since
+  OMP's bundled catalog pins the same behavior to the provider id `mistral`
+  and does not match a custom provider id.
 - Models your plan gates (e.g. Labs models disabled for your org) stay
   listed but return an error on use; Mistral's models endpoint does not
   surface entitlements.
