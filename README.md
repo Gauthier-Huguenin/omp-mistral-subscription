@@ -122,6 +122,34 @@ Apple), pay-as-you-go cannot be enabled, so usage stops at quota exhaustion.
 Check your plan in the Mistral admin panel before relying on this for heavy
 workloads.
 
+### Billing buckets (vibe vs api) and `/mistral budget`
+
+Mistral serves Vibe and API traffic on the same endpoint and routes billing by
+`metadata.call_source` in the request body: present bills the **Vibe Code**
+quota, absent bills the plan's **Included API** budget (controlled experiment:
+yetone/magpie#7216; mistralai/mistral-vibe#1589). The official `vibe` CLI
+always sends `call_source: "vibe_code"`.
+
+This extension exposes the switch:
+
+```
+/mistral budget vibe   # inject metadata.call_source=vibe_code -> Vibe Code quota (default)
+/mistral budget api    # omit it -> Included API budget
+/mistral budget        # show current bucket
+/mistral status        # show bucket + console-cookie state
+```
+
+The choice persists in `~/.omp/agent/mistral-subscription-budget.txt`
+(env override: `MISTRAL_BUDGET_MODE=vibe|api`). At 100% of a bucket with
+pay-as-you-go off, calls fail with HTTP 402 `billing_*_budget_exhausted`
+(code 2303) until the monthly reset.
+
+`/usage` shows both monthly meters (Vibe Code usage, Included API usage) when
+a console cookie is stored: `/mistral set-cookie` and paste the `Cookie` header
+from `console.mistral.ai` (needs `csrftoken` and an `ory_session_*`), or set
+`MISTRAL_COOKIE`.
+
+
 ## How it works
 
 1. `/login` calls `POST https://console.mistral.ai/api/vibe/sign-in` with a
